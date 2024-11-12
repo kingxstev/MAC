@@ -1,0 +1,127 @@
+# Path: stock_dashboard_bot.py
+
+import yfinance as yf
+import pandas as pd
+import talib
+import numpy as np
+import streamlit as st
+import plotly.graph_objs as go
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_squared_error
+from textblob import TextBlob
+import requests
+from bs4 import BeautifulSoup
+import tweepy
+import matplotlib.pyplot as plt
+from plotly.subplots import make_subplots
+
+# 1. Fetch Stock Data
+def fetch_stock_data(ticker, start_date='2022-01-01'):
+    return yf.download(ticker, start=start_date)
+
+# 2. Scrape News Headlines
+def scrape_headlines(url):
+    response = requests.get(url)
+    soup = BeautifulSoup(response.text, 'html.parser')
+    return [h.text for h in soup.find_all('h3')][:10]
+
+# 3. Twitter API Sentiment
+def twitter_api_auth():
+    api_key = 'your_api_key'
+    api_secret = 'your_api_secret'
+    access_token = 'your_access_token'
+    access_token_secret = 'your_access_token_secret'
+    
+    auth = tweepy.OAuthHandler(api_key, api_secret)
+    auth.set_access_token(access_token, access_token_secret)
+    return tweepy.API(auth)
+
+def fetch_tweets(query, count=100):
+    api = twitter_api_auth()
+    tweets = api.search_tweets(q=query, count=count, lang='en')
+    return [tweet.text for tweet in tweets]
+
+def sentiment_analysis(texts):
+    sentiment_scores = [TextBlob(text).sentiment.polarity for text in texts]
+    avg_sentiment = sum(sentiment_scores) / len(sentiment_scores)
+    return avg_sentiment
+
+# 4. Predict Stock Prices
+def train_predictive_model(data):
+    data['Target'] = data['Close'].shift(-1)
+    X = data[['Open', 'High', 'Low', 'Close', 'Volume']].iloc[:-1]
+    y = data['Target'].iloc[:-1]
+    
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    
+    model = RandomForestRegressor(n_estimators=100, random_state=42)
+    model.fit(X_train, y_train)
+    
+    predictions = model.predict(X_test)
+    mse = mean_squared_error(y_test, predictions)
+    
+    return model, mse, predictions, y_test
+
+# 5. Plotly Interactive Dashboard
+def plot_dashboard(data, predictions=None):
+    st.title('SOXL & NVDA Stock Analysis Dashboard')
+    
+    # Plot candlestick
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
+                        vertical_spacing=0.1, subplot_titles=('Candlestick Chart', 'Predicted vs Actual Prices'))
+    
+    candlestick = go.Candlestick(
+        x=data.index,
+        open=data['Open'],
+        high=data['High'],
+        low=data['Low'],
+        close=data['Close'],
+        name='Candlestick'
+    )
+    fig.add_trace(candlestick, row=1, col=1)
+    
+    # Add prediction plot
+    if predictions is not None:
+        actual_prices = go.Scatter(
+            x=data.index[-len(predictions):],
+            y=predictions,
+            mode='lines',
+            name='Predicted Prices',
+            line=dict(color='orange')
+        )
+        fig.add_trace(actual_prices, row=2, col=1)
+    
+    fig.update_layout(height=800, title='Stock Analysis', showlegend=True)
+    st.plotly_chart(fig)
+
+# 6. Streamlit Interactive App
+def main():
+    st.sidebar.title("Select Ticker")
+    ticker = st.sidebar.selectbox("Select Stock", ['SOXL', 'NVDA'])
+    
+    data = fetch_stock_data(ticker)
+    st.sidebar.subheader("Select Time Period")
+    start_date = st.sidebar.date_input('Start date', value=pd.to_datetime('2022-01-01'))
+    data = data[start_date:]
+    
+    # Display Dataframe
+    st.subheader(f'{ticker} Data')
+    st.write(data)
+    
+    # Model Training and Prediction
+    st.subheader("Train and Predict")
+    model, mse, predictions, y_test = train_predictive_model(data)
+    st.write(f"Model Mean Squared Error: {mse}")
+    
+    # Dashboard
+    plot_dashboard(data, predictions)
+    
+    # Sentiment Analysis
+    st.subheader("Sentiment Analysis")
+    tweets = fetch_tweets(ticker)
+    sentiment = sentiment_analysis(tweets)
+    st.write(f"Sentiment Score: {sentiment}")
+
+if __name__ == "__main__":
+    main()
